@@ -473,6 +473,8 @@ def build(args):
         num_classes = 1
     if args.dataset_file == 'e2e_dance':
         num_classes = 1
+    if args.dataset_file == 'e2e_hsmot_rgb':
+        num_classes = 8
     device = torch.device(args.device)
 
     backbone = build_backbone(args)

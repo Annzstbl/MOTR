@@ -38,6 +38,8 @@ def load_model(model, model_path, optimizer=None, resume=False,
                         state_dict[k] = state_dict[k][1:3]
                     elif model_state_dict[k].shape[0] == 3:
                         state_dict[k] = state_dict[k][1:4]
+                    elif model_state_dict[k].shape[0] == 8:
+                        state_dict[k] = state_dict[k][1:9]
                     else:
                         raise NotImplementedError('invalid shape: {}'.format(model_state_dict[k].shape))
                     continue

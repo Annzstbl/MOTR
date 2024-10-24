@@ -33,7 +33,7 @@ from .qim import build as build_query_interaction_layer
 from .memory_bank import build_memory_bank
 from .deformable_detr import SetCriterion, MLP
 from .segmentation import sigmoid_focal_loss
-
+from mmcv.ops.box_iou_rotated import box_iou_rotated
 
 class ClipMatcher(SetCriterion):
     def __init__(self, num_classes,
@@ -125,10 +125,13 @@ class ClipMatcher(SetCriterion):
         mask = (target_obj_ids != -1)
 
         loss_bbox = F.l1_loss(src_boxes[mask], target_boxes[mask], reduction='none')
-        loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
-            box_ops.box_cxcywh_to_xyxy(src_boxes[mask]),
-            box_ops.box_cxcywh_to_xyxy(target_boxes[mask])))
-
+        # loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
+        #     box_ops.box_cxcywh_to_xyxy(src_boxes[mask]),
+        #     box_ops.box_cxcywh_to_xyxy(target_boxes[mask])))
+        if len(src_boxes[mask]) == 0 or len(target_boxes[mask]) == 0:
+            loss_giou = torch.zeros_like(loss_bbox)
+        else:
+            loss_giou = 1- box_iou_rotated(src_boxes[mask], target_boxes[mask], aligned=True)
         losses = {}
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
         losses['loss_giou'] = loss_giou.sum() / num_boxes
@@ -188,7 +191,7 @@ class ClipMatcher(SetCriterion):
             'pred_boxes': pred_boxes_i.unsqueeze(0),
         }
 
-        # step1. inherit and update the previous tracks.
+        # step1. inherit and update the previous tracks.  #我理解是把那些track query所生成出来的目标选出来操作
         num_disappear_track = 0
         for j in range(len(track_instances)):
             obj_id = track_instances.obj_idxes[j].item()
@@ -249,9 +252,11 @@ class ClipMatcher(SetCriterion):
         active_track_boxes = track_instances.pred_boxes[active_idxes]
         if len(active_track_boxes) > 0:
             gt_boxes = gt_instances_i.boxes[track_instances.matched_gt_idxes[active_idxes]]
-            active_track_boxes = box_ops.box_cxcywh_to_xyxy(active_track_boxes)
-            gt_boxes = box_ops.box_cxcywh_to_xyxy(gt_boxes)
-            track_instances.iou[active_idxes] = matched_boxlist_iou(Boxes(active_track_boxes), Boxes(gt_boxes))
+
+            track_instances.iou[active_idxes] = box_iou_rotated(active_track_boxes, gt_boxes, aligned=True)
+            # active_track_boxes = box_ops.box_cxcywh_to_xyxy(active_track_boxes)
+            # gt_boxes = box_ops.box_cxcywh_to_xyxy(gt_boxes)
+            # track_instances.iou[active_idxes] = matched_boxlist_iou(Boxes(active_track_boxes), Boxes(gt_boxes))
 
         # step7. merge the unmatched pairs and the matched pairs.
         matched_indices = torch.cat([new_matched_indices, prev_matched_indices], dim=0)
@@ -386,7 +391,7 @@ class MOTR(nn.Module):
         hidden_dim = transformer.d_model
         self.num_classes = num_classes
         self.class_embed = nn.Linear(hidden_dim, num_classes)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        self.bbox_embed = MLP(hidden_dim, hidden_dim, 5, 3)
         self.num_feature_levels = num_feature_levels
         self.use_checkpoint = use_checkpoint
         if not two_stage:
@@ -464,7 +469,7 @@ class MOTR(nn.Module):
         track_instances.iou = torch.zeros((len(track_instances),), dtype=torch.float, device=device)
         track_instances.scores = torch.zeros((len(track_instances),), dtype=torch.float, device=device)
         track_instances.track_scores = torch.zeros((len(track_instances),), dtype=torch.float, device=device)
-        track_instances.pred_boxes = torch.zeros((len(track_instances), 4), dtype=torch.float, device=device)
+        track_instances.pred_boxes = torch.zeros((len(track_instances), 5), dtype=torch.float, device=device)
         track_instances.pred_logits = torch.zeros((len(track_instances), self.num_classes), dtype=torch.float, device=device)
 
         mem_bank_len = self.mem_bank_len
@@ -525,6 +530,8 @@ class MOTR(nn.Module):
             outputs_class = self.class_embed[lvl](hs[lvl])
             tmp = self.bbox_embed[lvl](hs[lvl])
             if reference.shape[-1] == 4:
+                tmp += reference
+            elif reference.shape[-1] == 5:
                 tmp += reference
             else:
                 assert reference.shape[-1] == 2
@@ -662,6 +669,7 @@ def build(args):
         'e2e_dance': 1,
         'e2e_joint': 1,
         'e2e_static_mot': 1,
+        'e2e_hsmot_rgb': 8
     }
     assert args.dataset_file in dataset_to_num_classes
     num_classes = dataset_to_num_classes[args.dataset_file]

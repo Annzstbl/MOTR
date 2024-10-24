@@ -19,6 +19,7 @@ from torch import nn
 from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 from models.structures import Instances
 
+from mmcv.ops.box_iou_rotated import box_iou_rotated
 
 class HungarianMatcher(nn.Module):
     """This class computes an assignment between the targets and the predictions of the network
@@ -100,8 +101,13 @@ class HungarianMatcher(nn.Module):
             cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
 
             # Compute the giou cost betwen boxes
-            cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox),
-                                             box_cxcywh_to_xyxy(tgt_bbox))
+            # cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox),
+                                            #  box_cxcywh_to_xyxy(tgt_bbox))
+            # 如果tgt_bbox是空
+            if tgt_bbox.size(0) == 0:
+                cost_giou = torch.zeros_like(cost_bbox)
+            else:
+                cost_giou = -box_iou_rotated(out_bbox, tgt_bbox)
 
             # Final cost matrix
             C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou

@@ -87,7 +87,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-
+DEBUG_MODE = False
 def train_one_epoch_mot(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0):
@@ -104,7 +104,39 @@ def train_one_epoch_mot(model: torch.nn.Module, criterion: torch.nn.Module,
     for data_dict in metric_logger.log_every(data_loader, print_freq, header):
         data_dict = data_dict_to_cuda(data_dict, device)
         outputs = model(data_dict)
+        
+        if DEBUG_MODE:
+            pred_boxes0 = outputs['pred_boxes'][0][0].cpu().detach().numpy()
+            pred_boxes1 = outputs['pred_boxes'][1][0].cpu().detach().numpy()
+            #制作全1的label
+            all_one_label = torch.ones_like(outputs['pred_logits'][0][0][:, 0]).cpu().numpy().astype(np.int32)
 
+            img0 = data_dict['imgs'][0].cpu().numpy().transpose(1, 2, 0)
+            #img0返归一化
+            img0 = (img0 * 0.225 + 0.45) * 255
+            img_width, img_height = img0.shape[1], img0.shape[0]
+            gt0 = data_dict['gt_instances'][0]
+            boxes = gt0.boxes.cpu().numpy()
+            boxes *= np.array([img_width, img_height, img_width, img_height, 1], dtype=np.float32)
+            pred_boxes0 *= np.array([img_width, img_height, img_width, img_height, 1], dtype=np.float32)
+            obj_ids = gt0.obj_ids.cpu().numpy()
+            labels = gt0.labels.cpu().numpy()
+            from mmrotate.core.visualization.image import imshow_det_rbboxes
+            imshow_det_rbboxes(img0, boxes, obj_ids, show=False, out_file='gt0.jpg')
+            imshow_det_rbboxes(img0, pred_boxes0, all_one_label, show=False, out_file='pred0.jpg')
+
+
+            img1 = data_dict['imgs'][1].cpu().numpy().transpose(1, 2, 0)
+            img1 = (img1 * 0.225 + 0.45) * 255
+            img_width, img_height = img1.shape[1], img1.shape[0]
+            gt1 = data_dict['gt_instances'][1]
+            boxes = gt1.boxes.cpu().numpy()
+            boxes *= np.array([img_width, img_height, img_width, img_height, 1], dtype=np.float32)
+            pred_boxes1 *= np.array([img_width, img_height, img_width, img_height, 1], dtype=np.float32)
+            obj_ids = gt1.obj_ids.cpu().numpy()
+            labels = gt1.labels.cpu().numpy()
+            imshow_det_rbboxes(img1, boxes, obj_ids, show=False, out_file='gt1.jpg')
+            imshow_det_rbboxes(img1, pred_boxes1, all_one_label, show=False, out_file='pred1.jpg')
 
         loss_dict = criterion(outputs, data_dict)
         # print("iter {} after model".format(cnt-1))

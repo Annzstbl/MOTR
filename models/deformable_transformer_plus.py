@@ -400,15 +400,24 @@ class DeformableTransformerDecoder(nn.Module):
             if reference_points.shape[-1] == 4:
                 reference_points_input = reference_points[:, :, None] \
                                          * torch.cat([src_valid_ratios, src_valid_ratios], -1)[:, None]
+            elif reference_points.shape[-1] == 5:# 带一个角度
+                reference_points_input = reference_points[:, :, :4]
+                reference_points_input = reference_points_input[:, :, None] \
+                                         * torch.cat([src_valid_ratios, src_valid_ratios], -1)[:, None]
+                # reference_points_angle = reference_points[:, :, 4:5]
             else:
                 assert reference_points.shape[-1] == 2
                 reference_points_input = reference_points[:, :, None] * src_valid_ratios[:, None]
             output = layer(output, query_pos, reference_points_input, src, src_spatial_shapes, src_level_start_index, src_padding_mask)
 
             # hack implementation for iterative bounding box refinement
+            # hack? 一种垃圾但实用的实现
             if self.bbox_embed is not None:
                 tmp = self.bbox_embed[lid](output)
                 if reference_points.shape[-1] == 4:
+                    new_reference_points = tmp + inverse_sigmoid(reference_points)
+                    new_reference_points = new_reference_points.sigmoid()
+                elif reference_points.shape[-1] == 5:
                     new_reference_points = tmp + inverse_sigmoid(reference_points)
                     new_reference_points = new_reference_points.sigmoid()
                 else:

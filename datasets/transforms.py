@@ -22,6 +22,8 @@ from util.box_ops import box_xyxy_to_cxcywh
 from util.misc import interpolate
 import numpy as np
 import os 
+from mmrotate.core.bbox.transforms import poly2obb
+
 
 
 
@@ -589,3 +591,235 @@ class MotCompose(Compose):
         for t in self.transforms:
             imgs, targets = t(imgs, targets)
         return imgs, targets
+
+
+class RotateNormalize(object):
+    '''
+        需要boxes是 xyxyxyxy格式
+    '''
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
+    
+    def __call__(self, image, target=None):
+        if target is not None:
+            target['ori_img'] = image.clone()
+        image = F.normalize(image, mean=self.mean, std=self.std)
+        if target is None:
+            return image, None
+        target = target.copy()
+        h, w = image.shape[-2:]
+        if "boxes" in target:
+            boxes = target["boxes"]
+            boxes = poly2obb(boxes)
+            boxes = boxes / torch.tensor([w, h, w, h, 1], dtype=torch.float32)
+            target["boxes"] = boxes
+        return image, target  
+
+
+class RotateMotNormalize(RotateNormalize):
+    def __call__(self, imgs, targets=None):
+        ret_imgs = []
+        ret_targets = []
+        for i in range(len(imgs)):
+            img_i = imgs[i]
+            targets_i = targets[i] if targets is not None else None
+            img_i, targets_i = super().__call__(img_i, targets_i)
+            ret_imgs.append(img_i)
+            ret_targets.append(targets_i)
+        return ret_imgs, ret_targets
+
+def rotate_hflip(image, target):
+    '''
+        xy xy xy xy
+    '''
+    flipped_image = F.hflip(image)
+
+    w, h = image.size
+
+    target = target.copy()
+    if "boxes" in target:
+        boxes = target["boxes"]
+        # boxes = boxes[:, [1, 0, 3, 2, 5, 4, 7, 6]] * torch.as_tensor([1, -1, 1, -1, 1, -1, 1, -1]) + torch.as_tensor([0, w, 0, w, 0, w, 0, w])
+        boxes = boxes * torch.as_tensor([-1, 1, -1, 1, -1, 1, -1, 1]) + torch.as_tensor([w, 0, w, 0, w, 0, w, 0])
+        # boxes = boxes[:, [2, 1, 0, 3]] * torch.as_tensor([-1, 1, -1, 1]) + torch.as_tensor([w, 0, w, 0])
+        target["boxes"] = boxes
+
+    if "masks" in target:
+        target['masks'] = target['masks'].flip(-1)
+
+    return flipped_image, target
+
+
+class RotateRandomHorizontalFlip(object):
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, img, target):
+        if random.random() < self.p:
+            return rotate_hflip(img, target)
+        return img, target
+
+
+class RotateMotRandomHorizontalFlip(RotateRandomHorizontalFlip):
+    def __call__(self, imgs, targets):
+        if random.random() < self.p:
+            ret_imgs = []
+            ret_targets = []
+            for img_i, targets_i in zip(imgs, targets):
+                img_i, targets_i = rotate_hflip(img_i, targets_i)
+                ret_imgs.append(img_i)
+                ret_targets.append(targets_i)
+            return ret_imgs, ret_targets
+        return imgs, targets
+    
+
+class RotateRandomResize(object):
+    def __init__(self, sizes, max_size=None):
+        assert isinstance(sizes, (list, tuple))
+        self.sizes = sizes
+        self.max_size = max_size
+
+    def __call__(self, img, target=None):
+        size = random.choice(self.sizes)
+        return rotate_resize(img, target, size, self.max_size)
+
+
+def rotate_resize(image, target, size, max_size=None):
+    # size can be min_size (scalar) or (w, h) tuple
+
+    def get_size_with_aspect_ratio(image_size, size, max_size=None):
+        w, h = image_size
+        if max_size is not None:
+            min_original_size = float(min((w, h)))
+            max_original_size = float(max((w, h)))
+            if max_original_size / min_original_size * size > max_size:
+                size = int(round(max_size * min_original_size / max_original_size))
+
+        if (w <= h and w == size) or (h <= w and h == size):
+            return (h, w)
+
+        if w < h:
+            ow = size
+            oh = int(size * h / w)
+        else:
+            oh = size
+            ow = int(size * w / h)
+
+        return (oh, ow)
+
+    def get_size(image_size, size, max_size=None):
+        if isinstance(size, (list, tuple)):
+            return size[::-1]
+        else:
+            return get_size_with_aspect_ratio(image_size, size, max_size)
+
+    size = get_size(image.size, size, max_size)
+    rescaled_image = F.resize(image, size)
+
+    if target is None:
+        return rescaled_image, None
+
+    ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_image.size, image.size))
+    ratio_width, ratio_height = ratios
+
+    target = target.copy()
+    if "boxes" in target:
+        boxes = target["boxes"]
+        scaled_boxes = boxes * torch.as_tensor([ratio_width, ratio_height, ratio_width, ratio_height, ratio_width, ratio_height, ratio_width, ratio_height])
+        target["boxes"] = scaled_boxes
+
+    if "area" in target:
+        area = target["area"]
+        scaled_area = area * (ratio_width * ratio_height)
+        target["area"] = scaled_area
+
+    h, w = size
+    target["size"] = torch.tensor([h, w])
+
+    if "masks" in target:
+        target['masks'] = interpolate(
+            target['masks'][:, None].float(), size, mode="nearest")[:, 0] > 0.5
+
+    return rescaled_image, target
+
+
+class RotateMotRandomResize(RotateRandomResize):
+    def __call__(self, imgs, targets):
+        size = random.choice(self.sizes)
+        ret_imgs = []
+        ret_targets = []
+        for img_i, targets_i in zip(imgs, targets):
+            img_i, targets_i = rotate_resize(img_i, targets_i, size, self.max_size)
+            ret_imgs.append(img_i)
+            ret_targets.append(targets_i)
+        return ret_imgs, ret_targets
+
+
+def rptate_crop_mot(image, target, region):
+    cropped_image = F.crop(image, *region)
+
+    target = target.copy()
+    i, j, h, w = region
+
+    # should we do something wrt the original size?
+    target["size"] = torch.tensor([h, w])
+
+    fields = ["labels", "area", "iscrowd", "obj_ids"]
+
+    if "boxes" in target:
+        boxes = target["boxes"]
+        cropped_boxes = boxes - torch.as_tensor([j, i, j, i, j, i, j, i])
+        target["boxes"] = cropped_boxes.reshape(-1, 8)
+        fields.append("boxes")
+
+    if "masks" in target:
+        # FIXME should we update the area here if there are no boxes?
+        target['masks'] = target['masks'][:, i:i + h, j:j + w]
+        fields.append("masks")
+
+
+    # 对于所有被截断的目标都删除
+    if "boxes" in target:
+        # 所有坐标 有小于0或者大于w,h的都删除
+        cropped_boxes = target['boxes'].reshape(-1, 4, 2)
+        keep = torch.all(cropped_boxes > 0, dim=2).all(dim=1) & torch.all(cropped_boxes < torch.tensor([w, h], dtype=torch.float32), dim=2).all(dim=1)
+        for field in fields:
+            target[field] = target[field][keep]
+
+    
+    # # remove elements for which the boxes or masks that have zero area
+    # if "boxes" in target or "masks" in target:
+    #     # favor boxes selection when defining which elements to keep
+    #     # this is compatible with previous implementation
+    #     if "boxes" in target:
+    #         cropped_boxes = target['boxes'].reshape(-1, 2, 2)
+    #         max_size = torch.as_tensor([w, h], dtype=torch.float32)
+    #         cropped_boxes = torch.min(cropped_boxes.reshape(-1, 2, 2), max_size)
+    #         cropped_boxes = cropped_boxes.clamp(min=0)
+    #         keep = torch.all(cropped_boxes[:, 1, :] > cropped_boxes[:, 0, :], dim=1)
+    #     else:
+    #         keep = target['masks'].flatten(1).any(1)
+
+    #     for field in fields:
+    #         target[field] = target[field][keep]
+
+    return cropped_image, target
+
+
+class RotateFixedMotRandomCrop(object):
+    def __init__(self, min_size: int, max_size: int):
+        self.min_size = min_size
+        self.max_size = max_size
+
+    def __call__(self, imgs: list, targets: list):
+        ret_imgs = []
+        ret_targets = []
+        w = random.randint(self.min_size, min(imgs[0].width, self.max_size))
+        h = random.randint(self.min_size, min(imgs[0].height, self.max_size))
+        region = T.RandomCrop.get_params(imgs[0], [h, w])
+        for img_i, targets_i in zip(imgs, targets):
+            img_i, targets_i = rptate_crop_mot(img_i, targets_i, region)
+            ret_imgs.append(img_i)
+            ret_targets.append(targets_i)
+        return ret_imgs, ret_targets

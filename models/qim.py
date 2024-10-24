@@ -11,7 +11,7 @@ from typing import Optional, List
 from util import box_ops
 from util.misc import inverse_sigmoid
 from models.structures import Boxes, Instances, pairwise_iou
-
+from mmcv.ops.box_iou_rotated import box_iou_rotated
 
 def random_drop_tracks(track_instances: Instances, drop_probability: float) -> Instances:
     if drop_probability > 0 and len(track_instances) > 0:
@@ -115,9 +115,10 @@ class QueryInteractionModule(QueryInteractionBase):
                 if num_fp >= len(inactive_instances):
                     fp_track_instances = inactive_instances
                 else:
-                    inactive_boxes = Boxes(box_ops.box_cxcywh_to_xyxy(inactive_instances.pred_boxes))
-                    selected_active_boxes = Boxes(box_ops.box_cxcywh_to_xyxy(selected_active_track_instances.pred_boxes))
-                    ious = pairwise_iou(inactive_boxes, selected_active_boxes)
+                    # inactive_boxes = Boxes(box_ops.box_cxcywh_to_xyxy(inactive_instances.pred_boxes))
+                    # selected_active_boxes = Boxes(box_ops.box_cxcywh_to_xyxy(selected_active_track_instances.pred_boxes))
+                    # ious = pairwise_iou(inactive_boxes, selected_active_boxes)
+                    ious = box_iou_rotated(inactive_instances.pred_boxes, selected_active_track_instances.pred_boxes)
                     # select the fp with the largest IoU for each active track.
                     fp_indexes = ious.max(dim=0).indices
 
@@ -180,6 +181,8 @@ class QueryInteractionModule(QueryInteractionBase):
         active_track_instances = self._select_active_tracks(data)
         active_track_instances = self._update_track_embedding(active_track_instances)
         init_track_instances: Instances = data['init_track_instances']
+        if len(active_track_instances) == 0:
+            return init_track_instances
         merged_track_instances = Instances.cat([init_track_instances, active_track_instances])
         return merged_track_instances
 
