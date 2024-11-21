@@ -15,9 +15,12 @@ from models.structures import Instances
 from random import choice, randint
 
 
-
+CLASSES = ['car', 'bike','pedestrian', 'van', 'truck', 'bus', 'tricycle', 'awning-bike']
 class DetHSMOTDetection:
-    def __init__(self, args, data_txt_path: str, seqs_folder, dataset2transform):
+    def __init__(self, args, data_txt_path: str, seqs_folder, dataset2transform, block_cat=None, block_trunc=False, vid_white_list=None):
+        '''
+            vid_white_lsit = ['data37-9', ...] # without ext
+        '''
         self.args = args
         self.dataset2transform = dataset2transform
         self.num_frames_per_batch = max(args.sampler_lengths)
@@ -27,14 +30,33 @@ class DetHSMOTDetection:
         self.split_dir = os.path.join(args.mot_path, "train", "rgb")
         self.labels_dir = os.path.join(args.mot_path, "train", "mot")
 
+        self.block_num_cls = 0
+        self.block_num_trunc = 0
+        if block_cat is not None:
+            block_cat_list = block_cat.split(',')
+            assert not any([block not in CLASSES for block in block_cat_list]), f'{block_cat} is not in CLASSES: {CLASSES}'
+            block_cat_index_list = [CLASSES.index(block) for block in block_cat_list]
+        else:
+            block_cat_index_list = []
+
         self.labels_full = defaultdict(lambda: defaultdict(list))
         for vid in os.listdir(self.labels_dir):
+            # 过滤视频序列
+            if vid_white_list is not None and os.path.splitext(vid)[0] not in vid_white_list:
+                print('skip vid {vid}')
+
             gt_path = os.path.join(self.labels_dir, vid)
             for l in open(gt_path):
-                t, i, *x0y0x1y1x2y2x3y3, _, cls = l.strip().split(',')[:12]
+                t, i, *x0y0x1y1x2y2x3y3, _, cls, trunc = l.strip().split(',')[:13]
                 # t, i, *xywh, mark, label = l.strip().split(',')[:8]
                 # t, i, mark, label = map(int, (t, i, mark, label))
                 t, i, cls = map(int, (t, i, cls))
+                if cls in block_cat_index_list:# 屏蔽类别
+                    self.block_num_cls += 1
+                    continue
+                if block_trunc and int(trunc) > 0:# 屏蔽截断的目标
+                    self.block_num_trunc += 1
+                    continue
                 # if mark == 0:
                     # continue
                 # if label in [3, 4, 5, 6, 9, 10, 11]:  # Non-person labels, adjust if needed for HSMOT RGB
@@ -59,6 +81,7 @@ class DetHSMOTDetection:
         self.sampler_steps: list = args.sampler_steps
         self.lengths: list = args.sampler_lengths
         print("sampler_steps={} lenghts={}".format(self.sampler_steps, self.lengths))
+        print(f"block instances by cls: {self.block_num_cls},  block instances by trunc: {self.block_num_trunc}")
         self.period_idx = 0
 
     def set_epoch(self, epoch):
@@ -178,17 +201,17 @@ def build(image_set, args):
     dataset2transform = build_dataset2transform(args, image_set)
     if image_set == 'train':
         data_txt_path = args.data_txt_path_train
-        dataset = DetHSMOTDetection(args, data_txt_path=data_txt_path, seqs_folder=root, dataset2transform=dataset2transform)
+        dataset = DetHSMOTDetection(args, data_txt_path=data_txt_path, seqs_folder=root, dataset2transform=dataset2transform, block_cat=args.block_cat, block_trunc=args.block_trunc, vid_white_list=args.vid_white_list)
     if image_set == 'val':
         data_txt_path = args.data_txt_path_val
-        dataset = DetHSMOTDetection(args, data_txt_path=data_txt_path, seqs_folder=root, dataset2transform=dataset2transform)
+        dataset = DetHSMOTDetection(args, data_txt_path=data_txt_path, seqs_folder=root, dataset2transform=dataset2transform, block_cat=args.block_cat, block_trunc=args.block_trunc, vid_white_list=args.vid_white_list)
     return dataset
 
 def make_transforms_for_hsmot_rgb(image_set, args=None):
 
     normalize = T.MotCompose([
         T.MotToTensor(),
-        T.RotateMotNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        T.RotateMotNormalize([0.259, 0.274, 0.241], [0.143, 0.140, 0.137])# HSMOT_RGB
         # T.MotNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     scales = [608, 640, 672, 704, 736, 768, 800, 832, 864, 896, 928, 960, 992]

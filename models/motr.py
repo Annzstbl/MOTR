@@ -34,6 +34,7 @@ from .memory_bank import build_memory_bank
 from .deformable_detr import SetCriterion, MLP
 from .segmentation import sigmoid_focal_loss
 from mmcv.ops.box_iou_rotated import box_iou_rotated
+from mmrotate.core.bbox.transforms import obb2poly
 
 class ClipMatcher(SetCriterion):
     def __init__(self, num_classes,
@@ -131,7 +132,9 @@ class ClipMatcher(SetCriterion):
         if len(src_boxes[mask]) == 0 or len(target_boxes[mask]) == 0:
             loss_giou = torch.zeros_like(loss_bbox)
         else:
-            loss_giou = 1- box_iou_rotated(src_boxes[mask], target_boxes[mask], aligned=True)
+            angle_scale = torch.as_tensor([1,1,1,1,math.pi/2], device=src_boxes.device)
+            loss_giou = 1- box_iou_rotated(src_boxes[mask] * angle_scale, target_boxes[mask] * angle_scale, aligned=True)
+            # loss_giou = 1- box_iou_rotated(src_boxes[mask], target_boxes[mask], aligned=True)
         losses = {}
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
         losses['loss_giou'] = loss_giou.sum() / num_boxes
@@ -149,7 +152,7 @@ class ClipMatcher(SetCriterion):
         # The matched gt for disappear track query is set -1.
         labels = []
         for gt_per_img, (_, J) in zip(gt_instances, indices):
-            labels_per_img = torch.ones_like(J)
+            labels_per_img = torch.ones_like(J) * self.num_classes#GT匹配的目标其值在0到self.num_classes-1之间，其他的值是target_classes初始化时设定的: self.num_classes
             # set labels of track-appear slots to 0.
             if len(gt_per_img) > 0:
                 labels_per_img[J != -1] = gt_per_img.labels[J[J != -1]]
@@ -175,7 +178,10 @@ class ClipMatcher(SetCriterion):
 
         return losses
 
-    def match_for_single_frame(self, outputs: dict):
+    def match_for_single_frame(self, outputs: dict, frame = None):
+        '''
+            推理的时候没有用到此函数
+        '''
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
 
         gt_instances_i = self.gt_instances[self._current_frame_idx]  # gt instances of i-th image.
@@ -185,24 +191,24 @@ class ClipMatcher(SetCriterion):
 
         obj_idxes = gt_instances_i.obj_ids
         obj_idxes_list = obj_idxes.detach().cpu().numpy().tolist()
-        obj_idx_to_gt_idx = {obj_idx: gt_idx for gt_idx, obj_idx in enumerate(obj_idxes_list)}
+        obj_idx_to_gt_idx = {obj_idx: gt_idx for gt_idx, obj_idx in enumerate(obj_idxes_list)}#gt 的 list 转 dict
         outputs_i = {
             'pred_logits': pred_logits_i.unsqueeze(0),
             'pred_boxes': pred_boxes_i.unsqueeze(0),
         }
 
-        # step1. inherit and update the previous tracks.  #我理解是把那些track query所生成出来的目标选出来操作
+        # step1. inherit and update the previous tracks.
         num_disappear_track = 0
         for j in range(len(track_instances)):
             obj_id = track_instances.obj_idxes[j].item()
             # set new target idx.
-            if obj_id >= 0:
-                if obj_id in obj_idx_to_gt_idx:
+            if obj_id >= 0: #track query生成的结果
+                if obj_id in obj_idx_to_gt_idx:#上一帧匹配到的结果 这一帧仍然在, 赋值matched_gt_idxes
                     track_instances.matched_gt_idxes[j] = obj_idx_to_gt_idx[obj_id]
-                else:
+                else:#上一帧匹配的结果，在这一帧消失了, 赋值-1
                     num_disappear_track += 1
                     track_instances.matched_gt_idxes[j] = -1  # track-disappear case.
-            else:
+            else: # detect query生成的结果
                 track_instances.matched_gt_idxes[j] = -1
 
         full_track_idxes = torch.arange(len(track_instances), dtype=torch.long).to(pred_logits_i.device)
@@ -213,15 +219,15 @@ class ClipMatcher(SetCriterion):
 
         # step2. select the unmatched slots.
         # note that the FP tracks whose obj_idxes are -2 will not be selected here.
-        unmatched_track_idxes = full_track_idxes[track_instances.obj_idxes == -1]
+        unmatched_track_idxes = full_track_idxes[track_instances.obj_idxes == -1]# detection query生成的结果
 
         # step3. select the untracked gt instances (new tracks).
         tgt_indexes = track_instances.matched_gt_idxes
-        tgt_indexes = tgt_indexes[tgt_indexes != -1]
+        tgt_indexes = tgt_indexes[tgt_indexes != -1]# 找到所有GT被匹配的框
 
         tgt_state = torch.zeros(len(gt_instances_i)).to(pred_logits_i.device)
         tgt_state[tgt_indexes] = 1
-        untracked_tgt_indexes = torch.arange(len(gt_instances_i)).to(pred_logits_i.device)[tgt_state == 0]
+        untracked_tgt_indexes = torch.arange(len(gt_instances_i)).to(pred_logits_i.device)[tgt_state == 0]#找到所有GT没有被匹配的框
         # untracked_tgt_indexes = select_unmatched_indexes(tgt_indexes, len(gt_instances_i))
         untracked_gt_instances = gt_instances_i[untracked_tgt_indexes]
 
@@ -240,20 +246,24 @@ class ClipMatcher(SetCriterion):
         unmatched_outputs = {
             'pred_logits': track_instances.pred_logits[unmatched_track_idxes].unsqueeze(0),
             'pred_boxes': track_instances.pred_boxes[unmatched_track_idxes].unsqueeze(0),
-        }
-        new_matched_indices = match_for_single_decoder_layer(unmatched_outputs, self.matcher)
+        }# 是detect query的结果， 即使上帧的目标这帧丢失了，也不会进匹配行列
 
-        # step5. update obj_idxes according to the new matching result.
+        new_matched_indices = match_for_single_decoder_layer(unmatched_outputs, self.matcher)# 生成框和gt框匈牙利匹配
+
+        # step5. update obj_idxes according to the new matching result.# 根据匹配结果更新 跟踪instance的参数
         track_instances.obj_idxes[new_matched_indices[:, 0]] = gt_instances_i.obj_ids[new_matched_indices[:, 1]].long()
         track_instances.matched_gt_idxes[new_matched_indices[:, 0]] = new_matched_indices[:, 1]
 
         # step6. calculate iou.
-        active_idxes = (track_instances.obj_idxes >= 0) & (track_instances.matched_gt_idxes >= 0)
+        active_idxes = (track_instances.obj_idxes >= 0) & (track_instances.matched_gt_idxes >= 0)#所有有id并且有匹配GT的预选框, 这里可能会有上帧匹配到GT了, 但是这一帧GT消失了，不会计算activate_idxes
         active_track_boxes = track_instances.pred_boxes[active_idxes]
         if len(active_track_boxes) > 0:
             gt_boxes = gt_instances_i.boxes[track_instances.matched_gt_idxes[active_idxes]]
 
-            track_instances.iou[active_idxes] = box_iou_rotated(active_track_boxes, gt_boxes, aligned=True)
+            track_instances.iou[active_idxes] = box_iou_rotated(
+                active_track_boxes* torch.as_tensor([1,1,1,1,math.pi/2]).to(active_track_boxes), 
+                gt_boxes* torch.as_tensor([1,1,1,1,math.pi/2]).to(gt_boxes), aligned=True)# 计算所有有匹配结果的IOU
+            # print(track_instances.iou[active_idxes])
             # active_track_boxes = box_ops.box_cxcywh_to_xyxy(active_track_boxes)
             # gt_boxes = box_ops.box_cxcywh_to_xyxy(gt_boxes)
             # track_instances.iou[active_idxes] = matched_boxlist_iou(Boxes(active_track_boxes), Boxes(gt_boxes))
@@ -262,7 +272,7 @@ class ClipMatcher(SetCriterion):
         matched_indices = torch.cat([new_matched_indices, prev_matched_indices], dim=0)
 
         # step8. calculate losses.
-        self.num_samples += len(gt_instances_i) + num_disappear_track
+        self.num_samples += len(gt_instances_i) + num_disappear_track #? 注意这里是累加
         self.sample_device = pred_logits_i.device
         for loss in self.losses:
             new_track_loss = self.get_loss(loss,
@@ -324,6 +334,7 @@ class RuntimeTrackerBase(object):
                 self.max_obj_id += 1
             elif track_instances.obj_idxes[i] >= 0 and track_instances.scores[i] < self.filter_score_thresh:
                 track_instances.disappear_time[i] += 1
+                # print("id {} has score {}, disappear_time {}".format(track_instances.obj_idxes[i], track_instances.scores[i], track_instances.disappear_time[i]))
                 if track_instances.disappear_time[i] >= self.miss_tolerance:
                     # Set the obj_id to -1.
                     # Then this track will be removed by TrackEmbeddingLayer.
@@ -351,12 +362,10 @@ class TrackerPostProcess(nn.Module):
         # prob = out_logits[...,:1].sigmoid()
         scores, labels = prob.max(-1)
 
-        # convert to [x0, y0, x1, y1] format
-        boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
-        # and from relative [0, 1] to absolute [0, height] coordinates
+        # 处理bbox
         img_h, img_w = target_size
-        scale_fct = torch.Tensor([img_w, img_h, img_w, img_h]).to(boxes)
-        boxes = boxes * scale_fct[None, :]
+        out_bbox = out_bbox * torch.Tensor([img_w, img_h, img_w, img_h, math.pi/2]).to(out_bbox)
+        boxes = obb2poly(out_bbox)
 
         track_instances.boxes = boxes
         track_instances.scores = scores
@@ -371,7 +380,7 @@ def _get_clones(module, N):
 
 
 class MOTR(nn.Module):
-    def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, criterion, track_embed,
+    def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, criterion, track_embed, run_time_tracker,
                  aux_loss=True, with_box_refine=False, two_stage=False, memory_bank=None, use_checkpoint=False):
         """ Initializes the model.
         Parameters:
@@ -388,8 +397,8 @@ class MOTR(nn.Module):
         self.num_queries = num_queries
         self.track_embed = track_embed
         self.transformer = transformer
-        hidden_dim = transformer.d_model
         self.num_classes = num_classes
+        hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 5, 3)
         self.num_feature_levels = num_feature_levels
@@ -451,7 +460,7 @@ class MOTR(nn.Module):
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
         self.post_process = TrackerPostProcess()
-        self.track_base = RuntimeTrackerBase()
+        self.track_base = run_time_tracker
         self.criterion = criterion
         self.memory_bank = memory_bank
         self.mem_bank_len = 0 if memory_bank is None else memory_bank.max_his_length
@@ -528,7 +537,7 @@ class MOTR(nn.Module):
                 reference = inter_references[lvl - 1]
             reference = inverse_sigmoid(reference)
             outputs_class = self.class_embed[lvl](hs[lvl])
-            tmp = self.bbox_embed[lvl](hs[lvl])
+            tmp = self.bbox_embed[lvl](hs[lvl])#与deformable_tracsformer_plus.py中DeformableTransformerDecoder部分重复
             if reference.shape[-1] == 4:
                 tmp += reference
             elif reference.shape[-1] == 5:
@@ -543,10 +552,11 @@ class MOTR(nn.Module):
         outputs_coord = torch.stack(outputs_coords)
 
         ref_pts_all = torch.cat([init_reference[None], inter_references[:, :, :, :2]], dim=0)
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'ref_pts': ref_pts_all[5]}
+        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'ref_pts': ref_pts_all[-1]}#这里从ref_pts_all[5]改成了ref_pts_all[-1], 对实际训练不产生影响. 实际的参考点是通过pred_boxes更新的
         if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)#这里把除了output_class和output_coord最后一层除去之后，剩下的组合起来，通过out['aux_outputs'][0-5]['pred_lgits'/'pred_boxes']索引
         out['hs'] = hs[-1]
+        out['debug'] = {'ref_pts_all': ref_pts_all} # for debug
         return out
     
     def _post_process_single_image(self, frame_res, track_instances, is_last):
@@ -554,10 +564,10 @@ class MOTR(nn.Module):
             if self.training:
                 track_scores = frame_res['pred_logits'][0, :].sigmoid().max(dim=-1).values
             else:
-                track_scores = frame_res['pred_logits'][0, :, 0].sigmoid()
+                track_scores = frame_res['pred_logits'][0, :].sigmoid().max(dim=-1).values#多类别
 
         track_instances.scores = track_scores
-        track_instances.pred_logits = frame_res['pred_logits'][0]
+        track_instances.pred_logits = frame_res['pred_logits'][0]# bs=1所以取0
         track_instances.pred_boxes = frame_res['pred_boxes'][0]
         track_instances.output_embedding = frame_res['hs'][0]
         if self.training:
@@ -566,7 +576,7 @@ class MOTR(nn.Module):
             track_instances = self.criterion.match_for_single_frame(frame_res)
         else:
             # each track will be assigned an unique global id by the track base.
-            self.track_base.update(track_instances)
+            self.track_base.update(track_instances)# 有id的小于filter_score_thresh=0.6记一次消失, 没有id的大于score_thresh=0.7 记为新目标出现
         if self.memory_bank is not None:
             track_instances = self.memory_bank(track_instances)
             # track_instances.track_scores = track_instances.track_scores[..., 0]
@@ -577,7 +587,7 @@ class MOTR(nn.Module):
         tmp['init_track_instances'] = self._generate_empty_tracks()
         tmp['track_instances'] = track_instances
         if not is_last:
-            out_track_instances = self.track_embed(tmp)
+            out_track_instances = self.track_embed(tmp)#更新跟踪的query_feat和query_pos, 并且在训练的时候把不活跃的删除(iou<0.5)
             frame_res['track_instances'] = out_track_instances
         else:
             frame_res['track_instances'] = None
@@ -590,12 +600,12 @@ class MOTR(nn.Module):
         if track_instances is None:
             track_instances = self._generate_empty_tracks()
         res = self._forward_single_image(img,
-                                         track_instances=track_instances)
-        res = self._post_process_single_image(res, track_instances, False)
+                                         track_instances=track_instances)#推理，得到结果，没有修改track_instances
+        res = self._post_process_single_image(res, track_instances, False)# 使用RuntimeTrackerBase，对滤除杂检测,QIM也在这里
 
         track_instances = res['track_instances']
-        track_instances = self.post_process(track_instances, ori_img_size)
-        ret = {'track_instances': track_instances}
+        track_instances = self.post_process(track_instances, ori_img_size)# 处理生成框
+        ret = {'track_instances': track_instances, 'debug':res['debug']}
         if 'ref_pts' in res:
             ref_pts = res['ref_pts']
             img_h, img_w = ori_img_size
@@ -647,8 +657,8 @@ class MOTR(nn.Module):
                 }
             else:
                 frame = nested_tensor_from_tensor_list([frame])
-                frame_res = self._forward_single_image(frame, track_instances)
-            frame_res = self._post_process_single_image(frame_res, track_instances, is_last)
+                frame_res = self._forward_single_image(frame, track_instances)#过transformer 计算各类输出
+            frame_res = self._post_process_single_image(frame_res, track_instances, is_last)# match 和 QIM更新
 
             track_instances = frame_res['track_instances']
             outputs['pred_logits'].append(frame_res['pred_logits'])
@@ -709,6 +719,10 @@ def build(args):
     criterion = ClipMatcher(num_classes, matcher=img_matcher, weight_dict=weight_dict, losses=losses)
     criterion.to(device)
     postprocessors = {}
+
+    # 显式构造
+    run_time_tracker = RuntimeTrackerBase(score_thresh=args.run_time_tracker_th1, filter_score_thresh=args.run_time_tracker_th2, miss_tolerance=args.run_time_tracker_miss_tolerance)
+
     model = MOTR(
         backbone,
         transformer,
@@ -722,5 +736,6 @@ def build(args):
         two_stage=args.two_stage,
         memory_bank=memory_bank,
         use_checkpoint=args.use_checkpoint,
+        run_time_tracker=run_time_tracker,
     )
     return model, criterion, postprocessors

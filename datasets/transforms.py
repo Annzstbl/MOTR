@@ -23,6 +23,7 @@ from util.misc import interpolate
 import numpy as np
 import os 
 from mmrotate.core.bbox.transforms import poly2obb
+import math
 
 
 
@@ -612,7 +613,7 @@ class RotateNormalize(object):
         if "boxes" in target:
             boxes = target["boxes"]
             boxes = poly2obb(boxes)
-            boxes = boxes / torch.tensor([w, h, w, h, 1], dtype=torch.float32)
+            boxes = boxes / torch.tensor([w, h, w, h, math.pi/2], dtype=torch.float32)
             target["boxes"] = boxes
         return image, target  
 

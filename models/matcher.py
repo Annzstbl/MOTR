@@ -20,6 +20,7 @@ from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 from models.structures import Instances
 
 from mmcv.ops.box_iou_rotated import box_iou_rotated
+import math
 
 class HungarianMatcher(nn.Module):
     """This class computes an assignment between the targets and the predictions of the network
@@ -88,8 +89,8 @@ class HungarianMatcher(nn.Module):
             if use_focal:
                 alpha = 0.25
                 gamma = 2.0
-                neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log())
-                pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
+                neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log()) #shape [bs * num_queries, num_classes]
+                pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())# shape [bs * num_queries, num_classes]
                 cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
             else:
                 # Compute the classification cost. Contrary to the loss, we don't use the NLL,
@@ -98,7 +99,9 @@ class HungarianMatcher(nn.Module):
                 cost_class = -out_prob[:, tgt_ids]
 
             # Compute the L1 cost between boxes
-            cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
+            # 不计算角度的L1损失
+            cost_bbox = torch.cdist(out_bbox[:,:-1], tgt_bbox[:,:-1], p=1)
+            # cost_bbox = torch.cdist(out_bbox[:,:], tgt_bbox[:,:], p=1)
 
             # Compute the giou cost betwen boxes
             # cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox),
@@ -107,7 +110,8 @@ class HungarianMatcher(nn.Module):
             if tgt_bbox.size(0) == 0:
                 cost_giou = torch.zeros_like(cost_bbox)
             else:
-                cost_giou = -box_iou_rotated(out_bbox, tgt_bbox)
+                angle_scale = torch.as_tensor([1,1,1,1,math.pi/2], device=tgt_bbox.device)
+                cost_giou = -box_iou_rotated(out_bbox * angle_scale, tgt_bbox * angle_scale)
 
             # Final cost matrix
             C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou

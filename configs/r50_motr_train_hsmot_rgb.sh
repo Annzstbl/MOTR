@@ -38,10 +38,13 @@
 #     --data_txt_path_val ./datasets/data_path/mot17.train \
 #     --mot_path /data3/PublicDataset/Custom/HSMOT \
 #     | tee ${EXP_DIR}/output.log
-
-PRETRAIN=/data/users/litianhao/hsmot_code/workdir/motr/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth
-EXP_DIR=/data/users/litianhao/hsmot_code/workdir/motr/e2e_motr_r50_train_hsmot_rgb_2
-CUDA_VISIBLE_DEVICES=2 python3 main.py \
+PRETRAIN=/data/users/litianhao/hsmot_code/workdir/motr/r50_deformable_detr_plus_iterative_bbox_refinement-checkpoint.pth
+EXP_DIR=/data/users/litianhao/hsmot_code/workdir/motr/e2e_motr_r50_train_hsmot_rgb_debug
+mkdir ${EXP_DIR}
+touch ${EXP_DIR}/output.log
+CUDA_VISIBLE_DEVICES=0,3 python3 -m torch.distributed.launch --nproc_per_node=2 \
+    --master_port 20011 \
+    --use_env main.py \
     --meta_arch motr \
     --use_checkpoint \
     --dataset_file e2e_hsmot_rgb \
@@ -67,4 +70,5 @@ CUDA_VISIBLE_DEVICES=2 python3 main.py \
     --data_txt_path_train ./datasets/data_path/joint.train \
     --data_txt_path_val ./datasets/data_path/mot17.train \
     --mot_path /data3/PublicDataset/Custom/HSMOT \
+    --num_workers 4 \
     | tee ${EXP_DIR}/output.log

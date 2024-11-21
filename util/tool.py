@@ -44,6 +44,9 @@ def load_model(model, model_path, optimizer=None, resume=False,
                         raise NotImplementedError('invalid shape: {}'.format(model_state_dict[k].shape))
                     continue
                 state_dict[k] = model_state_dict[k]
+            else:
+                pass
+                # print('Match parameter {}, shape {}.'.format(k, state_dict[k].shape))
         else:
             print('Drop parameter {}.'.format(k) + msg)
     for k in model_state_dict:

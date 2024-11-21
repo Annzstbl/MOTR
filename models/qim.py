@@ -12,6 +12,7 @@ from util import box_ops
 from util.misc import inverse_sigmoid
 from models.structures import Boxes, Instances, pairwise_iou
 from mmcv.ops.box_iou_rotated import box_iou_rotated
+import math
 
 def random_drop_tracks(track_instances: Instances, drop_probability: float) -> Instances:
     if drop_probability > 0 and len(track_instances) > 0:
@@ -118,13 +119,16 @@ class QueryInteractionModule(QueryInteractionBase):
                     # inactive_boxes = Boxes(box_ops.box_cxcywh_to_xyxy(inactive_instances.pred_boxes))
                     # selected_active_boxes = Boxes(box_ops.box_cxcywh_to_xyxy(selected_active_track_instances.pred_boxes))
                     # ious = pairwise_iou(inactive_boxes, selected_active_boxes)
-                    ious = box_iou_rotated(inactive_instances.pred_boxes, selected_active_track_instances.pred_boxes)
+                    angle_scale = torch.as_tensor([1,1,1,1,math.pi/2], device=inactive_instances.pred_boxes.device)
+                    ious = box_iou_rotated(inactive_instances.pred_boxes * angle_scale, selected_active_track_instances.pred_boxes * angle_scale)
                     # select the fp with the largest IoU for each active track.
                     fp_indexes = ious.max(dim=0).indices
 
                     # remove duplicate fp.
                     fp_indexes = torch.unique(fp_indexes)
                     fp_track_instances = inactive_instances[fp_indexes]
+                    fp_obj_idxes = torch.ones_like(fp_track_instances.obj_idxes) * (-2)#set fp_obj_idxes to -2
+                    fp_track_instances.obj_idxes = fp_obj_idxes
 
                 merged_track_instances = Instances.cat([active_track_instances, fp_track_instances])
                 return merged_track_instances
@@ -149,9 +153,9 @@ class QueryInteractionModule(QueryInteractionBase):
         if len(track_instances) == 0:
             return track_instances
         dim = track_instances.query_pos.shape[1]
-        out_embed = track_instances.output_embedding
-        query_pos = track_instances.query_pos[:, :dim // 2]
-        query_feat = track_instances.query_pos[:, dim//2:]
+        out_embed = track_instances.output_embedding#特征
+        query_pos = track_instances.query_pos[:, :dim // 2]#位置编码
+        query_feat = track_instances.query_pos[:, dim//2:]#query特征
         q = k = query_pos + out_embed
 
         tgt = out_embed
@@ -178,7 +182,7 @@ class QueryInteractionModule(QueryInteractionBase):
         return track_instances
 
     def forward(self, data) -> Instances:
-        active_track_instances = self._select_active_tracks(data)
+        active_track_instances = self._select_active_tracks(data)# 推理时 只考虑track_instances有id的保留
         active_track_instances = self._update_track_embedding(active_track_instances)
         init_track_instances: Instances = data['init_track_instances']
         if len(active_track_instances) == 0:

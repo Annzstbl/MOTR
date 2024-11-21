@@ -147,6 +147,15 @@ def get_args_parser():
     parser.add_argument('--num_workers', default=2, type=int)
     parser.add_argument('--pretrained', default=None, help='resume from checkpoint')
     parser.add_argument('--cache_mode', default=False, action='store_true', help='whether to cache images on memory')
+    parser.add_argument('--block_cat', type=str, default=None, help='example --block_cat car,bus')
+    parser.add_argument('--block_trunc', action='store_true', default=False)
+    parser.add_argument('--vid_white_list', default=None)
+
+    # * inference parameters
+    parser.add_argument('--run_time_tracker_th1', default=0.7, type=float)
+    parser.add_argument('--run_time_tracker_th2', default=0.6, type=float)
+    parser.add_argument('--run_time_tracker_miss_tolerance', default=5, type=int)
+
 
     # end-to-end mot settings.
     parser.add_argument('--mot_path', default='/data/Dataset/mot', type=str)
