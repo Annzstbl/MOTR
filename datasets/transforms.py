@@ -598,9 +598,10 @@ class RotateNormalize(object):
     '''
         需要boxes是 xyxyxyxy格式
     '''
-    def __init__(self, mean, std):
+    def __init__(self, mean, std, version='le90'):
         self.mean = mean
         self.std = std
+        self.version = version
     
     def __call__(self, image, target=None):
         if target is not None:
@@ -612,8 +613,13 @@ class RotateNormalize(object):
         h, w = image.shape[-2:]
         if "boxes" in target:
             boxes = target["boxes"]
-            boxes = poly2obb(boxes)
-            boxes = boxes / torch.tensor([w, h, w, h, math.pi/2], dtype=torch.float32)
+            boxes = poly2obb(boxes, self.version)
+            if self.version == "oc":
+                boxes = boxes / torch.tensor([w, h, w, h, math.pi/2], dtype=torch.float32)
+            elif self.version == "le90":
+                boxes = boxes / torch.tensor([w, h, w, h, math.pi], dtype=torch.float32) + torch.tensor([0, 0, 0, 0, 0.5], dtype=torch.float32)
+            elif self.version == "le135":
+                boxes = boxes / torch.tensor([w, h, w, h, math.pi], dtype=torch.float32) + torch.tensor([0, 0, 0, 0, 0.25], dtype=torch.float32)
             target["boxes"] = boxes
         return image, target  
 

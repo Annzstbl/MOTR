@@ -4,17 +4,15 @@
 # Modified from Deformable DETR (https://github.com/fundamentalvision/Deformable-DETR)
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
 # ------------------------------------------------------------------------
-PWD=$(cd `dirname $0` && pwd)
-cd $PWD/../
 
 PRETRAIN=/data/users/litianhao/hsmot_code/workdir/motr/r50_deformable_detr_plus_iterative_bbox_refinement-checkpoint.pth
-EXP_DIR=/data/users/litianhao/hsmot_code/workdir/motr/20241230_e2e_motr_r50_train_hsmot_rgb_02_l1_mmrotate_interval3_diffiou
+EXP_DIR=/data/users/litianhao/hsmot_code/workdir/motr/e2e_motr_r50_train_hsmot_rgb_23_l1_mmrotate
 mkdir -p ${EXP_DIR}
 touch ${EXP_DIR}/output.log
 cp $0 ${EXP_DIR}/
 
-CUDA_VISIBLE_DEVICES=0 python3 -m torch.distributed.launch --nproc_per_node=1 \
-    --master_port 20011 \
+CUDA_VISIBLE_DEVICES=3,4 python3 -m torch.distributed.launch --nproc_per_node=2 \
+    --master_port 20010 \
     --use_env main.py \
     --meta_arch motr \
     --use_checkpoint \
@@ -28,7 +26,7 @@ CUDA_VISIBLE_DEVICES=0 python3 -m torch.distributed.launch --nproc_per_node=1 \
     --output_dir ${EXP_DIR} \
     --batch_size 1 \
     --sample_mode 'random_interval' \
-    --sample_interval 3 \
+    --sample_interval 10 \
     --sampler_steps 5 9 15 \
     --sampler_lengths 2 3 4 5 \
     --update_query_pos \

@@ -1,6 +1,6 @@
 
-PRETRAIN=/data/users/litianhao/hsmot_code/workdir/motr/e2e_motr_r50_train_hsmot_rgb_20/checkpoint.pth
-EXP_DIR=/data/users/litianhao/hsmot_code/workdir/motr/e2e_motr_r50_train_hsmot_rgb_20
+PRETRAIN=/data/users/litianhao/hsmot_code/workdir/motr/e2e_motr_r50_train_hsmot_rgb_23_l1_mmrotate_interval3/checkpoint.pth
+EXP_DIR=/data/users/litianhao/hsmot_code/workdir/motr/e2e_motr_r50_train_hsmot_rgb_23_l1_mmrotate_interval3
 
 
 CUDA_VISIBLE_DEVICES=3 python3 eval_hsmot_rgb_train.py \

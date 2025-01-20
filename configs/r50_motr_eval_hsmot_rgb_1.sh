@@ -1,11 +1,9 @@
-PWD=$(cd `dirname $0` && pwd)
-cd $PWD/../
 
-PRETRAIN=/data/users/litianhao/hsmot_code/workdir/motr/20241230_e2e_motr_r50_train_hsmot_rgb_01_l1_mmrotate_interval3/checkpoint.pth
-EXP_DIR=/data/users/litianhao/hsmot_code/workdir/motr/20241230_e2e_motr_r50_train_hsmot_rgb_01_l1_mmrotate_interval3
+PRETRAIN=/data/users/litianhao/hsmot_code/workdir/motr/e2e_motr_r50_train_hsmot_rgb_23_l1_mmrotate/checkpoint.pth
+EXP_DIR=/data/users/litianhao/hsmot_code/workdir/motr/e2e_motr_r50_train_hsmot_rgb_23_l1_mmrotate
 
 
-CUDA_VISIBLE_DEVICES=4 python3 eval_hsmot_rgb.py \
+CUDA_VISIBLE_DEVICES=1 python3 eval_hsmot_rgb.py \
     --meta_arch motr \
     --use_checkpoint \
     --dataset_file e2e_hsmot_rgb \

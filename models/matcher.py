@@ -19,8 +19,9 @@ from torch import nn
 from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 from models.structures import Instances
 
-from mmcv.ops.box_iou_rotated import box_iou_rotated
 import math
+from hsmot.util.dist import l1_dist_rotate, box_iou_rotated_norm_bboxes1
+
 
 class HungarianMatcher(nn.Module):
     """This class computes an assignment between the targets and the predictions of the network
@@ -47,7 +48,7 @@ class HungarianMatcher(nn.Module):
         self.cost_giou = cost_giou
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, "all costs cant be 0"
 
-    def forward(self, outputs, targets, use_focal=True):
+    def forward(self, outputs, targets, use_focal=True, img_metas=None):
         """ Performs the matching
 
         Params:
@@ -81,9 +82,11 @@ class HungarianMatcher(nn.Module):
             if isinstance(targets[0], Instances):
                 tgt_ids = torch.cat([gt_per_img.labels for gt_per_img in targets])
                 tgt_bbox = torch.cat([gt_per_img.boxes for gt_per_img in targets])
+                norm_tgt_bbox = torch.cat([gt_per_img.norm_boxes for gt_per_img in targets])
             else:
                 tgt_ids = torch.cat([v["labels"] for v in targets])
                 tgt_bbox = torch.cat([v["boxes"] for v in targets])
+                norm_tgt_bbox = torch.cat([v["norm_boxes"] for v in targets])
 
             # Compute the classification cost.
             if use_focal:
@@ -100,7 +103,8 @@ class HungarianMatcher(nn.Module):
 
             # Compute the L1 cost between boxes
             # 不计算角度的L1损失
-            cost_bbox = torch.cdist(out_bbox[:,:-1], tgt_bbox[:,:-1], p=1)
+            # cost_bbox = torch.cdist(out_bbox[:,:-1], tgt_bbox[:,:-1], p=1)
+            cost_bbox = l1_dist_rotate(out_bbox, norm_tgt_bbox, aligned=False)
             # cost_bbox = torch.cdist(out_bbox[:,:], tgt_bbox[:,:], p=1)
 
             # Compute the giou cost betwen boxes
@@ -110,8 +114,7 @@ class HungarianMatcher(nn.Module):
             if tgt_bbox.size(0) == 0:
                 cost_giou = torch.zeros_like(cost_bbox)
             else:
-                angle_scale = torch.as_tensor([1,1,1,1,math.pi/2], device=tgt_bbox.device)
-                cost_giou = -box_iou_rotated(out_bbox * angle_scale, tgt_bbox * angle_scale)
+                cost_giou = -box_iou_rotated_norm_bboxes1(out_bbox, tgt_bbox, img_shape=img_metas['img_shape'], version = img_metas['version'])
 
             # Final cost matrix
             C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou

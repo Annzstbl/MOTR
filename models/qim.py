@@ -13,6 +13,7 @@ from util.misc import inverse_sigmoid
 from models.structures import Boxes, Instances, pairwise_iou
 from mmcv.ops.box_iou_rotated import box_iou_rotated
 import math
+from hsmot.util.dist import box_iou_rotated_norm_bboxes1
 
 def random_drop_tracks(track_instances: Instances, drop_probability: float) -> Instances:
     if drop_probability > 0 and len(track_instances) > 0:
@@ -104,7 +105,7 @@ class QueryInteractionModule(QueryInteractionBase):
     def _random_drop_tracks(self, track_instances: Instances) -> Instances:
         return random_drop_tracks(track_instances, self.random_drop)
 
-    def _add_fp_tracks(self, track_instances: Instances, active_track_instances: Instances) -> Instances:
+    def _add_fp_tracks(self, track_instances: Instances, active_track_instances: Instances, img_metas) -> Instances:
             inactive_instances = track_instances[track_instances.obj_idxes < 0]
 
             # add fp for each active track in a specific probability.
@@ -119,8 +120,7 @@ class QueryInteractionModule(QueryInteractionBase):
                     # inactive_boxes = Boxes(box_ops.box_cxcywh_to_xyxy(inactive_instances.pred_boxes))
                     # selected_active_boxes = Boxes(box_ops.box_cxcywh_to_xyxy(selected_active_track_instances.pred_boxes))
                     # ious = pairwise_iou(inactive_boxes, selected_active_boxes)
-                    angle_scale = torch.as_tensor([1,1,1,1,math.pi/2], device=inactive_instances.pred_boxes.device)
-                    ious = box_iou_rotated(inactive_instances.pred_boxes * angle_scale, selected_active_track_instances.pred_boxes * angle_scale)
+                    ious = box_iou_rotated_norm_bboxes1(inactive_instances.pred_boxes, selected_active_track_instances.pred_boxes, img_shape=img_metas['img_shape'], version=img_metas['version'])
                     # select the fp with the largest IoU for each active track.
                     fp_indexes = ious.max(dim=0).indices
 
@@ -135,7 +135,7 @@ class QueryInteractionModule(QueryInteractionBase):
 
             return active_track_instances
 
-    def _select_active_tracks(self, data: dict) -> Instances:
+    def _select_active_tracks(self, data: dict, img_metas) -> Instances:
         track_instances: Instances = data['track_instances']
         if self.training:
             active_idxes = (track_instances.obj_idxes >= 0) & (track_instances.iou > 0.5)
@@ -143,7 +143,7 @@ class QueryInteractionModule(QueryInteractionBase):
             # set -2 instead of -1 to ensure that these tracks will not be selected in matching.
             active_track_instances = self._random_drop_tracks(active_track_instances)
             if self.fp_ratio > 0:
-                active_track_instances = self._add_fp_tracks(track_instances, active_track_instances)
+                active_track_instances = self._add_fp_tracks(track_instances, active_track_instances, img_metas)
         else:
             active_track_instances = track_instances[track_instances.obj_idxes >= 0]
 
@@ -181,8 +181,8 @@ class QueryInteractionModule(QueryInteractionBase):
         track_instances.ref_pts = inverse_sigmoid(track_instances.pred_boxes[:, :2].detach().clone())
         return track_instances
 
-    def forward(self, data) -> Instances:
-        active_track_instances = self._select_active_tracks(data)# 推理时 只考虑track_instances有id的保留
+    def forward(self, data, img_metas) -> Instances:
+        active_track_instances = self._select_active_tracks(data, img_metas)# 推理时 只考虑track_instances有id的保留
         active_track_instances = self._update_track_embedding(active_track_instances)
         init_track_instances: Instances = data['init_track_instances']
         if len(active_track_instances) == 0:

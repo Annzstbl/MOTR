@@ -7,17 +7,26 @@ import numpy as np
 import torch
 import torch.utils.data
 import os.path as osp
-from PIL import Image, ImageDraw
+# from PIL import Image, ImageDraw
 import copy
 import datasets.transforms as T
 from models.structures import Instances
+from mmrotate.core import eval_rbbox_map, obb2poly_np, poly2obb_np
+import mmcv
+
+from hsmot.datasets.pipelines.compose import MotCompose
+from hsmot.datasets.pipelines.channel import MotrToMmrotate, MmrotateToMotr
+from hsmot.datasets.pipelines.loading import MotLoadAnnotations, MotLoadImageFromFile
+from hsmot.datasets.pipelines.transforms import MotRRsize, MotRRandomFlip, MotRRandomCrop, MotNormalize, MotPad
+from hsmot.datasets.pipelines.formatting import MotCollect, MotDefaultFormatBundle, MotShow
+
 
 from random import choice, randint
 
 
 CLASSES = ['car', 'bike','pedestrian', 'van', 'truck', 'bus', 'tricycle', 'awning-bike']
 class DetHSMOTDetection:
-    def __init__(self, args, data_txt_path: str, seqs_folder, dataset2transform, block_cat=None, block_trunc=False, vid_white_list=None):
+    def __init__(self, args, data_txt_path: str, seqs_folder, dataset2transform, block_cat=None, block_trunc=False, vid_white_list=None, version='le135'):
         '''
             vid_white_lsit = ['data37-9', ...] # without ext
         '''
@@ -29,42 +38,30 @@ class DetHSMOTDetection:
         self.video_dict = {}
         self.split_dir = os.path.join(args.mot_path, "train", "rgb")
         self.labels_dir = os.path.join(args.mot_path, "train", "mot")
+        self.version = version
 
-        self.block_num_cls = 0
-        self.block_num_trunc = 0
-        if block_cat is not None:
-            block_cat_list = block_cat.split(',')
-            assert not any([block not in CLASSES for block in block_cat_list]), f'{block_cat} is not in CLASSES: {CLASSES}'
-            block_cat_index_list = [CLASSES.index(block) for block in block_cat_list]
-        else:
-            block_cat_index_list = []
+
+        assert block_cat == None, f'不支持屏蔽类别'
+        assert block_trunc == False, f'不支持屏蔽截断'
+
+        #TODO 硬编码
+        vid_white_list = ['data24-1']
+        vid_white_list = None
 
         self.labels_full = defaultdict(lambda: defaultdict(list))
         for vid in os.listdir(self.labels_dir):
             # 过滤视频序列
             if vid_white_list is not None and os.path.splitext(vid)[0] not in vid_white_list:
-                print('skip vid {vid}')
+                print(f'skip vid {vid}')
+            else:
+                print(f'loading vid {vid}')
 
             gt_path = os.path.join(self.labels_dir, vid)
             for l in open(gt_path):
-                t, i, *x0y0x1y1x2y2x3y3, _, cls, trunc = l.strip().split(',')[:13]
-                # t, i, *xywh, mark, label = l.strip().split(',')[:8]
-                # t, i, mark, label = map(int, (t, i, mark, label))
+                t, i, *x0y0x1y1x2y2x3y3, _, cls, trunc = l.strip().split(',')[:13] 
                 t, i, cls = map(int, (t, i, cls))
-                if cls in block_cat_index_list:# 屏蔽类别
-                    self.block_num_cls += 1
-                    continue
-                if block_trunc and int(trunc) > 0:# 屏蔽截断的目标
-                    self.block_num_trunc += 1
-                    continue
-                # if mark == 0:
-                    # continue
-                # if label in [3, 4, 5, 6, 9, 10, 11]:  # Non-person labels, adjust if needed for HSMOT RGB
-                    # continue
-                # else:
-                    # crowd = False
                 x0, y0, x1, y1, x2, y2, x3, y3 = map(float, (x0y0x1y1x2y2x3y3))
-                self.labels_full[vid][t].append([x0, y0, x1, y1, x2, y2, x3, y3, i, cls])
+                self.labels_full[vid][t].append(np.array([x0, y0, x1, y1, x2, y2, x3, y3, i, cls], dtype=np.float32))
 
         vid_files = list(self.labels_full.keys())
 
@@ -77,11 +74,11 @@ class DetHSMOTDetection:
             self.vid_tmax[vid] = t_max - 1
             for t in range(t_min, t_max - self.num_frames_per_batch):
                 self.indices.append((vid, t))
+        print(f"Found {len(vid_files)} videos, {len(self.indices)} frames")
 
         self.sampler_steps: list = args.sampler_steps
         self.lengths: list = args.sampler_lengths
         print("sampler_steps={} lenghts={}".format(self.sampler_steps, self.lengths))
-        print(f"block instances by cls: {self.block_num_cls},  block instances by trunc: {self.block_num_trunc}")
         self.period_idx = 0
 
     def set_epoch(self, epoch):
@@ -107,47 +104,61 @@ class DetHSMOTDetection:
         gt_instances.boxes = targets['boxes']
         gt_instances.labels = targets['labels']
         gt_instances.obj_ids = targets['obj_ids']
-        gt_instances.area = targets['area']
+        gt_instances.norm_boxes = targets['norm_boxes']
         return gt_instances
 
     def _pre_single_frame(self, vid, idx: int):
         img_path = os.path.join(self.split_dir, osp.splitext(vid)[0], f'{idx:06d}.png')
-        img = Image.open(img_path)
-        targets = {}
-        w, h = img.size
-        assert w > 0 and h > 0, f"invalid image {img_path} with shape {w} {h}"
+       
+        data_info = {}
+        data_info['filename'] = img_path
+        data_info['ann'] = {}
+        gt_bboxes = []
+        gt_labels = []
+        gt_ids = []
+        gt_polygons = []
         obj_idx_offset = self.video_dict[vid] * 100000
+        
+        for *xyxyxyxy, id, cls in self.labels_full[vid][idx]:
+            x, y, w, h, a = poly2obb_np(np.array(xyxyxyxy, dtype=np.float32), self.version)
+            gt_bboxes.append([x, y, w, h, a])
+            gt_labels.append(cls)
+            gt_polygons.append(xyxyxyxy)
+            gt_ids.append(id+obj_idx_offset)
+        
+        if gt_bboxes:
+            data_info['ann']['bboxes'] = np.array(
+                gt_bboxes, dtype=np.float32)
+            data_info['ann']['labels'] = np.array(
+                gt_labels, dtype=np.int64)
+            data_info['ann']['polygons'] = np.array(
+                gt_polygons, dtype=np.float32)
+            data_info['ann']['trackids'] = np.array(gt_ids, dtype=np.int64)
+        else:
+            data_info['ann']['bboxes'] = np.zeros((0, 5),
+                                                    dtype=np.float32)
+            data_info['ann']['labels'] = np.array([], dtype=np.int64)
+            data_info['ann']['polygons'] = np.zeros((0, 8),
+                                                    dtype=np.float32)
+            data_info['ann']['trackids'] = np.zeros((0), dtype=np.int64)
+        
+        img_info = data_info
+        ann_info = data_info['ann']
+        results = dict(img_info=img_info, ann_info=ann_info)
 
-        targets['dataset'] = 'HSMOT_RGB'
-        targets['boxes'] = []
-        targets['area'] = []
-        targets['iscrowd'] = []
-        targets['labels'] = []
-        targets['obj_ids'] = []
-        targets['image_id'] = torch.as_tensor(idx)
-        targets['size'] = torch.as_tensor([h, w])
-        targets['orig_size'] = torch.as_tensor([h, w])
-        for *x0y0x1y1x2y2x3y3, id, cls in self.labels_full[vid][idx]:
-            targets['boxes'].append(x0y0x1y1x2y2x3y3)
-            area = 0.5 * abs(
-                (x0y0x1y1x2y2x3y3[0] * x0y0x1y1x2y2x3y3[3] + x0y0x1y1x2y2x3y3[2] * x0y0x1y1x2y2x3y3[5] + x0y0x1y1x2y2x3y3[4] * x0y0x1y1x2y2x3y3[1]) -
-                (x0y0x1y1x2y2x3y3[1] * x0y0x1y1x2y2x3y3[2] + x0y0x1y1x2y2x3y3[3] * x0y0x1y1x2y2x3y3[4] + x0y0x1y1x2y2x3y3[5] * x0y0x1y1x2y2x3y3[0])
-            )
-            targets['area'].append(area)
-            targets['iscrowd'].append(False)
-            targets['labels'].append(cls)
-            targets['obj_ids'].append(id + obj_idx_offset)
-
-        targets['area'] = torch.as_tensor(targets['area'])
-        targets['iscrowd'] = torch.as_tensor(targets['iscrowd'])
-        targets['labels'] = torch.as_tensor(targets['labels'])
-        targets['obj_ids'] = torch.as_tensor(targets['obj_ids'], dtype=torch.float64)
-        targets['boxes'] = torch.as_tensor(targets['boxes'], dtype=torch.float32).reshape(-1, 8)
-        # targets['boxes'][:, 2:] += targets['boxes'][:, :2]
-        return img, targets
+        # """Prepare results dict for pipeline."""
+        results['img_prefix'] = None
+        results['seg_prefix'] = None
+        results['proposal_file'] = None
+        results['bbox_fields'] = []
+        results['mask_fields'] = []
+        results['seg_fields'] = []
+        
+        return results
 
     def pre_continuous_frames(self, vid, indices):
-        return zip(*[self._pre_single_frame(vid, i) for i in indices])
+        # return zip(*[self._pre_single_frame(vid, i) for i in indices])
+        return [self._pre_single_frame(vid, i) for i in indices]
 
     def sample_indices(self, vid, f_index):
         assert self.sample_mode == 'random_interval'
@@ -159,11 +170,18 @@ class DetHSMOTDetection:
     def __getitem__(self, idx):
         vid, f_index = self.indices[idx]
         indices = self.sample_indices(vid, f_index)
-        images, targets = self.pre_continuous_frames(vid, indices)
-        dataset_name = targets[0]['dataset']
-        transform = self.dataset2transform[dataset_name]
+        # images, targets = self.pre_continuous_frames(vid, indices)
+        data_info = self.pre_continuous_frames(vid, indices)
+        transform = self.dataset2transform
+        # if transform is not None:
+        #     images, targets = transform(images, targets)
         if transform is not None:
-            images, targets = transform(images, targets)
+            results = transform(data_info)
+        assert type(results) == tuple
+        images = results[0]
+        targets = results[1]
+        img_metas = results[2]
+
         gt_instances = []
         for img_i, targets_i in zip(images, targets):
             gt_instances_i = self._targets_to_instances(targets_i, img_i.size())
@@ -171,6 +189,7 @@ class DetHSMOTDetection:
         return {
             'imgs': images,
             'gt_instances': gt_instances,
+            'img_metas': img_metas
         }
         
         # return images, gt_instances
@@ -185,12 +204,12 @@ def build_dataset2transform(args, image_set):
     hsmot_train = make_transforms_for_hsmot_rgb('train', args)
     hsmot_test = make_transforms_for_hsmot_rgb('val', args)
 
-    dataset2transform_train = {'HSMOT_RGB': hsmot_train}
-    dataset2transform_val = {'HSMOT_RGB': hsmot_test}
+    # dataset2transform_train = {'HSMOT_RGB': hsmot_train}
+    # dataset2transform_val = {'HSMOT_RGB': hsmot_test}
     if image_set == 'train':
-        return dataset2transform_train
+        return hsmot_train
     elif image_set == 'val':
-        return dataset2transform_val
+        return hsmot_test
     else:
         raise NotImplementedError()
 
@@ -209,31 +228,39 @@ def build(image_set, args):
 
 def make_transforms_for_hsmot_rgb(image_set, args=None):
 
-    normalize = T.MotCompose([
-        T.MotToTensor(),
-        T.RotateMotNormalize([0.259, 0.274, 0.241], [0.143, 0.140, 0.137])# HSMOT_RGB
-        # T.MotNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
-    scales = [608, 640, 672, 704, 736, 768, 800, 832, 864, 896, 928, 960, 992]
 
+    scales_h = [608, 640, 672, 704, 736, 768, 800, 832, 864, 896, 928, 960, 992, 1024, 1056, 1088, 1120, 1152, 1184]
+    scales_w = [ int(h/4*3) for h in scales_h ]
+    scales = list(zip(scales_h, scales_w))
+    
     if image_set == 'train':
-        return T.MotCompose([
-            T.RotateMotRandomHorizontalFlip(),
-            T.MotRandomSelect(
-                T.RotateMotRandomResize(scales, max_size=1536),
-                T.MotCompose([
-                    T.RotateMotRandomResize([800, 1000, 1200]),
-                    T.RotateFixedMotRandomCrop(800, 1200),
-                    T.RotateMotRandomResize(scales, max_size=1536),
-                ])
-            ),
-            normalize,
-        ])
-
+        return MotCompose([
+            MotrToMmrotate(),
+            MotLoadImageFromFile(),
+            MotLoadAnnotations(poly2mask=False),
+            # MotShow(save_path='/data/users/litianhao/hsmot_code/workdir/debug/MotShow',to_bgr=False, img_name_tail='ori'),
+            MotRRandomFlip(direction=['horizontal', 'vertical'], flip_ratio=[0.25, 0.25], version='le135'),
+            MotRRandomCrop(crop_size=(800,1200), crop_type='absolute_range', version='le135', allow_negative_crop=True, iof_thr=0.5),
+            # MotShow(save_path='/data/users/litianhao/hsmot_code/workdir/debug/MotShow',to_bgr=False, img_name_tail='randomcrop'),
+            MotRRsize(multiscale_mode='value', img_scale=scales, bbox_clip_border=False),
+            MotNormalize(mean=[66.04, 69.87, 61.45], std=[36.46, 35.70, 34.93]),
+            MotPad(size_divisor=32),
+            # MotShow(save_path='/data/users/litianhao/hsmot_code/workdir/debug/MotShow', version='le135', mean=[66.04, 69.87, 61.45], std=[36.46, 35.70, 34.93]),
+            MotDefaultFormatBundle(),
+            MotCollect(keys=['img', 'gt_bboxes', 'gt_labels', 'gt_trackids']),
+            MmrotateToMotr()
+        ])   
+    
     if image_set == 'val':
         return T.MotCompose([
-            T.RotateMotRandomResize([800], max_size=1333),
-            normalize,
+            MotrToMmrotate(),
+            MotLoadImageFromFile(),
+            MotRRsize(multiscale_mode='value', img_scale=scales, bbox_clip_border=False),
+            # MotNormalize(mean=[0.259, 0.274, 0.241], std=[0.143, 0.140, 0.137]),
+            MotNormalize(mean=[66.04, 69.87, 61.45], std=[36.46, 35.70, 34.93]),
+            MotDefaultFormatBundle(),
+            MotCollect(keys=['img']),
+            MmrotateToMotr()
         ])
 
     raise ValueError(f'unknown {image_set}')
