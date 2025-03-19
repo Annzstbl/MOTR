@@ -134,5 +134,21 @@ def build_backbone(args):
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks or (args.num_feature_levels > 1)
     backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
+
+    if args.input_channels != 3:
+        # 修改backbone第一个卷积的输入通道数
+        conv1_3ch = backbone.body.conv1
+        new_conv = nn.Conv2d(
+            in_channels=args.input_channels,
+            out_channels=conv1_3ch.out_channels,
+            kernel_size=conv1_3ch.kernel_size,
+            stride=conv1_3ch.stride,
+            padding=conv1_3ch.padding,
+            dilation=conv1_3ch.dilation,
+            groups=conv1_3ch.groups,
+            bias=(conv1_3ch.bias is not None)
+        )
+        backbone.body.conv1 = new_conv
+
     model = Joiner(backbone, position_embedding)
     return model
