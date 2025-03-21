@@ -11,9 +11,7 @@ import os.path as osp
 import copy
 import datasets.transforms as T
 from models.structures import Instances
-from mmrotate.core import eval_rbbox_map, obb2poly_np, poly2obb_np
-import mmcv
-
+from hsmot.mmlab.hs_mmrotate import poly2obb
 from hsmot.datasets.pipelines.compose import MotCompose
 from hsmot.datasets.pipelines.channel import MotrToMmrotate, MmrotateToMotr
 from hsmot.datasets.pipelines.loading import MotLoadAnnotations, MotLoadImageFromFile, MotLoadMultichannelImageFromNpy

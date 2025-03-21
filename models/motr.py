@@ -33,7 +33,7 @@ from .qim import build as build_query_interaction_layer
 from .memory_bank import build_memory_bank
 from .deformable_detr import SetCriterion, MLP
 from .segmentation import sigmoid_focal_loss
-from mmrotate.core.bbox.transforms import obb2poly
+from hsmot.mmlab.hs_mmrotate import obb2poly
 from hsmot.loss.loss import l1_loss_rotate, loss_rotated_iou_norm_bboxes1
 from hsmot.util.dist import box_iou_rotated_norm_bboxes1
 

@@ -440,7 +440,7 @@ class Detector(object):
 
             total_dts += len(dt_instances)
 
-            if vis:#TODO clscolor
+            if vis:
                 # for visual
                 cur_vis_img_path = os.path.join(self.save_path, 'frame_{}.jpg'.format(i+1))
                 gt_boxes = None
@@ -487,7 +487,7 @@ if __name__ == '__main__':
             continue
         print("solve {}".format(seq_num))
         det = Detector(args, model=detr, seq_num=seq_num)
-        det.detect(vis=True, prob_threshold = 0.7)# score低于0.7的删掉
+        det.detect(vis=args.vis, prob_threshold = 0.7)# score低于0.7的删掉
         accs.append(det.eval_seq())
         seqs.append(seq_num)
 

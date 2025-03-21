@@ -22,7 +22,8 @@ from util.box_ops import box_xyxy_to_cxcywh
 from util.misc import interpolate
 import numpy as np
 import os 
-from mmrotate.core.bbox.transforms import poly2obb
+from hsmot.mmlab.hs_mmrotate import poly2obb
+
 import math
 
 
