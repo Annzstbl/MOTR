@@ -192,6 +192,7 @@ def get_args_parser():
 
     # multi spectra settings
     parser.add_argument('--input_channels', type=int, default=8)
+    parser.add_argument('--npy2rgb', action='store_true', default=False)
     return parser
 
 
@@ -331,6 +332,7 @@ def main(args):
             lr_scheduler.step(lr_scheduler.last_epoch)
             args.start_epoch = checkpoint['epoch'] + 1
     
+    #! 这里不对
     if args.eval:
         test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
                                               data_loader_val, base_ds, device, args.output_dir)

@@ -22,7 +22,7 @@ from models.structures import Boxes, matched_boxlist_iou, pairwise_iou
 
 from util.misc import inverse_sigmoid
 from util.box_ops import box_cxcywh_to_xyxy
-from models.ops.modules import MSDeformAttn
+from models.ops.modules import MSDeformAttn_Rotate as MSDeformAttn
 
 
 class DeformableTransformer(nn.Module):
@@ -397,14 +397,10 @@ class DeformableTransformerDecoder(nn.Module):
         intermediate = []
         intermediate_reference_points = []
         for lid, layer in enumerate(self.layers):
-            if reference_points.shape[-1] == 4:
+
+            if reference_points.shape[-1] == 5:
                 reference_points_input = reference_points[:, :, None] \
-                                         * torch.cat([src_valid_ratios, src_valid_ratios], -1)[:, None]
-            elif reference_points.shape[-1] == 5:# 带一个角度
-                reference_points_input = reference_points[:, :, :4]
-                reference_points_input = reference_points_input[:, :, None] \
-                                         * torch.cat([src_valid_ratios, src_valid_ratios], -1)[:, None]
-                # reference_points_angle = reference_points[:, :, 4:5]
+                    * torch.cat([src_valid_ratios, src_valid_ratios,torch.ones((*src_valid_ratios.shape[:-1], 1), device=src_valid_ratios.device)], -1)[:, None]
             else:
                 assert reference_points.shape[-1] == 2
                 reference_points_input = reference_points[:, :, None] * src_valid_ratios[:, None]
@@ -414,10 +410,7 @@ class DeformableTransformerDecoder(nn.Module):
             # hack? 一种垃圾但实用的实现
             if self.bbox_embed is not None:
                 tmp = self.bbox_embed[lid](output)
-                if reference_points.shape[-1] == 4:
-                    new_reference_points = tmp + inverse_sigmoid(reference_points)
-                    new_reference_points = new_reference_points.sigmoid()
-                elif reference_points.shape[-1] == 5:
+                if reference_points.shape[-1] == 5:
                     new_reference_points = tmp + inverse_sigmoid(reference_points)
                     new_reference_points = new_reference_points.sigmoid()
                 else:

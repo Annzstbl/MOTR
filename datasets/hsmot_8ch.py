@@ -11,7 +11,7 @@ import os.path as osp
 import copy
 import datasets.transforms as T
 from models.structures import Instances
-from hsmot.mmlab.hs_mmrotate import poly2obb
+from hsmot.mmlab.hs_mmrotate import poly2obb, poly2obb_np
 
 import mmcv
 
@@ -38,6 +38,7 @@ class DetHSMOTDetection:
         self.split_dir = os.path.join(args.mot_path, "train", "npy")
         self.labels_dir = os.path.join(args.mot_path, "train", "mot")
         self.version = version
+        self.npy2rgb = args.npy2rgb #是否从npy中提取rgb图像235通道
 
 
         assert block_cat == None, f'不支持屏蔽类别'
@@ -183,6 +184,8 @@ class DetHSMOTDetection:
         for img_i, targets_i in zip(images, targets):
             gt_instances_i = self._targets_to_instances(targets_i, img_i.size())
             gt_instances.append(gt_instances_i)
+        if self.npy2rgb:
+            images = [img[[1,2,4], :, :] for img in images]
         return {
             'imgs': images,
             'gt_instances': gt_instances,
@@ -256,9 +259,10 @@ def make_transforms_for_hsmot_rgb(image_set, args=None):
         return T.MotCompose([
             MotrToMmrotate(),
             MotLoadImageFromFile(),
-            MotRRsize(multiscale_mode='value', img_scale=scales, bbox_clip_border=False),
+            # MotRRsize(multiscale_mode='value', img_scale=scales, bbox_clip_border=False),
             # MotNormalize(mean=[0.259, 0.274, 0.241], std=[0.143, 0.140, 0.137]),
             MotNormalize(mean=mean, std=std, to_rgb=False),
+            MotPad(size_divisor=32),
             MotDefaultFormatBundle(),
             MotCollect(keys=['img']),
             MmrotateToMotr()
