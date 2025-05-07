@@ -7,14 +7,14 @@
 PWD=$(cd `dirname $0` && pwd)
 cd $PWD/../
 
-PRETRAIN=/data3/litianhao/hsmot/motr/r50_deformable_detr_plus_iterative_bbox_refinement-checkpoint_8ch_interpolate.pth
-EXP_DIR=/data3/litianhao/hsmot/motr/99/8ch_fconv10lr_rotateAttn_1gpu
+PRETRAIN=/data3/litianhao/hsmot/motr/r50_deformable_detr_plus_iterative_bbox_refinement-checkpoint_convhsi.pth
+EXP_DIR=/data3/litianhao/hsmot/motr/197/8ch_fconv10lr_rotateAttn_convmsi_2gpu
 mkdir -p ${EXP_DIR}
 touch ${EXP_DIR}/output.log
 cp $0 ${EXP_DIR}/
 
 # CUDA_VISIBLE_DEVICES=0 python3 -m torch.distributed.launch --nproc_per_node=1 \
-CUDA_VISIBLE_DEVICES=2 python3 -m torch.distributed.launch --nproc_per_node=1 \
+CUDA_VISIBLE_DEVICES=0,1 python3 -m torch.distributed.launch --nproc_per_node=2 \
     --master_port 20011 \
     --use_env main_8ch.py \
     --meta_arch motr \
@@ -40,6 +40,7 @@ CUDA_VISIBLE_DEVICES=2 python3 -m torch.distributed.launch --nproc_per_node=1 \
     --fp_ratio 0.3 \
     --query_interaction_layer 'QIM' \
     --extra_track_attn \
-    --mot_path /data/users/wangying01/lth/hsmot/data/HSMOT \
+    --mot_path /data/users/litianhao/hsmot_code/data/HSMOT \
     --num_workers 2 \
     | tee ${EXP_DIR}/output.log -a
+    # --mot_path /data/users/wangying01/lth/hsmot/data/HSMOT \

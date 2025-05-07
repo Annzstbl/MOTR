@@ -414,7 +414,8 @@ class MOTR(nn.Module):
         self.num_classes = num_classes
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 5, 3)
+        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        self.angle_embed = MLP(hidden_dim, hidden_dim, 1, 3)
         self.num_feature_levels = num_feature_levels
         self.use_checkpoint = use_checkpoint
         if not two_stage:
@@ -451,6 +452,8 @@ class MOTR(nn.Module):
         self.class_embed.bias.data = torch.ones(num_classes) * bias_value
         nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
         nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
+        nn.init.constant_(self.angle_embed.layers[-1].weight.data, 0)
+        nn.init.constant_(self.angle_embed.layers[-1].bias.data, 0)
         for proj in self.input_proj:
             nn.init.xavier_uniform_(proj[0].weight, gain=1)
             nn.init.constant_(proj[0].bias, 0)
@@ -460,9 +463,12 @@ class MOTR(nn.Module):
         if with_box_refine:
             self.class_embed = _get_clones(self.class_embed, num_pred)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
+            self.angle_embed = _get_clones(self.angle_embed, num_pred)
             nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
+            nn.init.constant_(self.angle_embed[0].layers[-1].bias.data, -math.log(3))
             # hack implementation for iterative bounding box refinement
             self.transformer.decoder.bbox_embed = self.bbox_embed
+            self.transformer.decoder.angle_embed = self.angle_embed
         else:
             nn.init.constant_(self.bbox_embed.layers[-1].bias.data[2:], -2.0)
             self.class_embed = nn.ModuleList([self.class_embed for _ in range(num_pred)])
@@ -557,7 +563,8 @@ class MOTR(nn.Module):
                 reference = inter_references[lvl - 1]
             reference = inverse_sigmoid(reference)
             outputs_class = self.class_embed[lvl](hs[lvl])
-            tmp = self.bbox_embed[lvl](hs[lvl])#与deformable_tracsformer_plus.py中DeformableTransformerDecoder部分重复
+            # tmp = self.bbox_embed[lvl](hs[lvl])#与deformable_tracsformer_plus.py中DeformableTransformerDecoder部分重复
+            tmp = torch.cat((self.bbox_embed[lvl](hs[lvl]), self.angle_embed[lvl](hs[lvl])), dim=-1)
             if reference.shape[-1] == 4:
                 tmp += reference
             elif reference.shape[-1] == 5:

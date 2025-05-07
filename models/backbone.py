@@ -23,6 +23,8 @@ from typing import Dict, List
 
 from util.misc import NestedTensor, is_main_process
 from .position_encoding import build_position_encoding
+import math
+from hsmot.modules.conv import ConvMSI
 
 class FrozenBatchNorm2d(torch.nn.Module):
     """
@@ -129,13 +131,28 @@ class Joiner(nn.Sequential):
         return out, pos
 
 
-def build_backbone(args):
+def build_backbone(args, conv3d=True):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks or (args.num_feature_levels > 1)
     backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
 
-    if args.input_channels != 3:
+
+    if args.input_channels != 3 and conv3d:
+        conv1_3ch = backbone.body.conv1
+        new_conv = ConvMSI(
+            c1=1,
+            c2=conv1_3ch.out_channels,
+            c3=args.input_channels,
+            k=(3, *conv1_3ch.kernel_size),
+            s=(1, *conv1_3ch.stride),
+            p=(1, *conv1_3ch.padding),
+            groups=conv1_3ch.out_channels,
+            final_bn = False,
+            final_act = False
+        )
+        backbone.body.conv1 = new_conv
+    else:
         # 修改backbone第一个卷积的输入通道数
         conv1_3ch = backbone.body.conv1
         new_conv = nn.Conv2d(
