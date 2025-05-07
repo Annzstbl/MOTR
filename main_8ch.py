@@ -278,10 +278,12 @@ def main(args):
 
     first_conv_names = []
     for n, p in model_without_ddp.named_parameters():
-        if match_name_keywords(n, args.lr_backbone_first_conv):
+        if match_name_keywords(n, args.lr_backbone_first_conv) and p.requires_grad:
             first_conv_names.append(n)
     if len(first_conv_names) > 0:
         print('first conv params:', first_conv_names)
+    else:
+        print('first conv params: None')
 
     if args.sgd:
         optimizer = torch.optim.SGD(param_dicts, lr=args.lr, momentum=0.9,
