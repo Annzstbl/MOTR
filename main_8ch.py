@@ -35,7 +35,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Deformable DETR Detector', add_help=False)
     parser.add_argument('--lr', default=2e-4, type=float)
     parser.add_argument('--lr_backbone_names', default=["backbone.0"], type=str, nargs='+')
-    parser.add_argument('--lr_backbone_first_conv', default=['backbone.0.body.conv1'], type=str, nargs='+')
+    parser.add_argument('--lr_backbone_first_conv', default=[], type=str, nargs='+')
     parser.add_argument('--lr_backbone_first_conv_multi', default=1, type=float)
     parser.add_argument('--lr_backbone', default=2e-5, type=float)
     parser.add_argument('--lr_linear_proj_names', default=['reference_points', 'sampling_offsets',], type=str, nargs='+')
@@ -44,7 +44,7 @@ def get_args_parser():
     parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--epochs', default=50, type=int)
     parser.add_argument('--lr_drop', default=40, type=int)
-    parser.add_argument('--save_period', default=50, type=int)
+    parser.add_argument('--save_period', default=1, type=int)
     parser.add_argument('--lr_drop_epochs', default=None, type=int, nargs='+')
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
@@ -275,7 +275,26 @@ def main(args):
             "lr": args.lr * args.lr_linear_proj_mult,
         }
     ]
-
+    param_name_dicts =[
+        {
+            "params":
+                [n for n, p in model_without_ddp.named_parameters()
+                 if not match_name_keywords(n, args.lr_backbone_names) and not match_name_keywords(n, args.lr_linear_proj_names) and p.requires_grad],
+            "lr": args.lr,
+        },
+        {
+            "params": [n for n, p in model_without_ddp.named_parameters() if match_name_keywords(n, args.lr_backbone_names) and p.requires_grad and not match_name_keywords(n, args.lr_backbone_first_conv)],
+            "lr": args.lr_backbone,
+        },
+        {
+            "params": [n for n, p in model_without_ddp.named_parameters() if match_name_keywords(n, args.lr_backbone_first_conv) and p.requires_grad],
+            "lr": args.lr_backbone * args.lr_backbone_first_conv_multi,
+        },
+        {
+            "params": [n for n, p in model_without_ddp.named_parameters() if match_name_keywords(n, args.lr_linear_proj_names) and p.requires_grad],
+            "lr": args.lr * args.lr_linear_proj_mult,
+        }
+    ]
     first_conv_names = []
     for n, p in model_without_ddp.named_parameters():
         if match_name_keywords(n, args.lr_backbone_first_conv) and p.requires_grad:

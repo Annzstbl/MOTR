@@ -149,10 +149,12 @@ def build_backbone(args, conv3d=True):
             p=(1, *conv1_3ch.padding),
             groups=conv1_3ch.out_channels,
             final_bn = False,
-            final_act = False
+            final_act = False,
+            use_bn_3d = False,
+            use_gn_3d = True
         )
         backbone.body.conv1 = new_conv
-    else:
+    elif args.input_channels != 3:
         # 修改backbone第一个卷积的输入通道数
         conv1_3ch = backbone.body.conv1
         new_conv = nn.Conv2d(
