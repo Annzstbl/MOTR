@@ -41,4 +41,6 @@ CUDA_VISIBLE_DEVICES=${GPU} python3 eval_hsmot_8ch.py \
     --query_interaction_layer 'QIM' \
     --extra_track_attn \
     --num_workers 0 \
+    --npy2rgb \
+    --input_channels 3 \
     | tee -a ${EXP_DIR}/predict.log

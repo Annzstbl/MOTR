@@ -8,13 +8,13 @@ PWD=$(cd `dirname $0` && pwd)
 cd $PWD/../
 
 PRETRAIN=/data3/litianhao/hsmot/motr/r50_deformable_detr_plus_iterative_bbox_refinement-checkpoint_convhsi.pth
-EXP_DIR=/data3/litianhao/hsmot/motr/197/3ch_rotateAttn_convmsi_2gpu
+EXP_DIR=/data3/litianhao/hsmot/motr/197/3ch_rotateAttn_convmsi_fconv0lr_2gpu
 mkdir -p ${EXP_DIR}
 touch ${EXP_DIR}/output.log
 cp $0 ${EXP_DIR}/
 
 # CUDA_VISIBLE_DEVICES=0 python3 -m torch.distributed.launch --nproc_per_node=1 \
-CUDA_VISIBLE_DEVICES=2,3 python3 -m torch.distributed.launch --nproc_per_node=2 \
+CUDA_VISIBLE_DEVICES=4,5 python3 -m torch.distributed.launch --nproc_per_node=2 \
     --master_port 20013 \
     --use_env main_8ch.py \
     --meta_arch motr \

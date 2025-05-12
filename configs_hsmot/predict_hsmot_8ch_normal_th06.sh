@@ -1,15 +1,19 @@
 # 参数1是EXP_DIR
 # 参数2是CUDA_VISIBLE_DIVECES
 # 用法 sh predict_hsmot_8ch_normal.sh /data/users/litianhao/hsmot_code/workdir/motr/motr_r50_train_hsmot_8ch_4gpu 0
-EXP_DIR=$1
-GPU=$2
+PRETRAIN_DIR=$1
+EXP_DIR=$2
+GPU=$3
 
 PWD=$(cd `dirname $0` && pwd)
 cd $PWD/../
 
-PRETRAIN=${EXP_DIR}/checkpoint0019.pth
+mkdir -p ${EXP_DIR}
+
+PRETRAIN=${PRETRAIN_DIR}/checkpoint0019.pth
 touch ${EXP_DIR}/predict.log
 
+echo ${PRETRAIN_DIR} >> ${EXP_DIR}/predict.log
 echo ${EXP_DIR} >> ${EXP_DIR}/predict.log
 echo ${GPU} >> ${EXP_DIR}/predict.log
 
@@ -20,6 +24,7 @@ CUDA_VISIBLE_DEVICES=${GPU} python3 eval_hsmot_8ch.py \
     --output_dir ${EXP_DIR} \
     --mot_path /data/users/litianhao/data/HSMOT \
     --resume ${PRETRAIN} \
+    --run_time_tracker_th1 0.6 \
     --meta_arch motr \
     --use_checkpoint \
     --dataset_file e2e_hsmot_8ch \
