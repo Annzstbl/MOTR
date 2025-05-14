@@ -193,6 +193,8 @@ def get_args_parser():
     # multi spectra settings
     parser.add_argument('--input_channels', type=int, default=8)
     parser.add_argument('--npy2rgb', action='store_true', default=False)
+    parser.add_argument('--conv3d', action='store_true', default=False)
+
     return parser
 
 
